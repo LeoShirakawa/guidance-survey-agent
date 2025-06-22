@@ -1,0 +1,13 @@
+fastapi
+uvicorn
+google-cloud-aiplatform
+requests
+python-multipart
+langchain
+jinja2
+google-cloud-discoveryengine
+reportlab
+python-docx
+openpyxl
+pandas
+pypdf

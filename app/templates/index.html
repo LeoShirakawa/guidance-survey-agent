@@ -1,0 +1,259 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Guidance Survey AI</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; line-height: 1.6; color: #333; max-width: 90%; margin: 20px auto; padding: 0 15px; background-color: #f8f9fa; }
+        h1, h2, h3 { color: #0056b3; }
+        h1 { text-align: center; }
+        h2 { border-bottom: 2px solid #007bff; padding-bottom: 5px; margin-top: 40px; }
+        h3 { margin-top: 30px; }
+        textarea { width: 100%; padding: 10px; border-radius: 5px; border: 1px solid #ccc; font-size: 16px; min-height: 200px; box-sizing: border-box; }
+        .button-container { text-align: center; margin-top: 20px; }
+        button { background-color: #007bff; color: white; border: none; padding: 12px 25px; border-radius: 5px; cursor: pointer; font-size: 16px; transition: background-color 0.3s; }
+        button:hover { background-color: #0056b3; }
+        #pdf-button { background-color: #28a745; margin-left: 10px; }
+        #pdf-button:hover { background-color: #218838; }
+        .results { margin-top: 30px; background-color: #fff; padding: 20px; border-radius: 5px; border: 1px solid #e0e0e0; }
+        pre { background-color: #eee; padding: 15px; border-radius: 5px; white-space: pre-wrap; word-wrap: break-word; }
+        .loader { display: none; text-align: center; margin-top: 20px; }
+        table { width: 100%; border-collapse: collapse; margin-top: 20px; }
+        th, td { border: 1px solid #ddd; padding: 12px; text-align: left; vertical-align: top; }
+        th { background-color: #f2f2f2; }
+        td:nth-child(2) { text-align: center; }
+        .classification-header { background-color: #0056b3; color: white; font-weight: bold; padding: 10px; }
+        .summary-container { display: flex; gap: 20px; align-items: flex-start; flex-wrap: wrap; }
+        .summary-text { flex: 2; }
+        .chart-container { flex: 1; min-width: 300px; }
+        .input-group { margin-top: 20px; }
+    </style>
+</head>
+<body>
+
+    <h1>Guidance Survey AI</h1>
+    <p>監査対象のレポート内容を以下に貼り付けるか、ファイルをアップロードしてください。</p>
+
+    <form id="audit-form">
+        <div class="input-group">
+            <textarea id="report_text" name="report_text" placeholder="ここにレポートのテキストを貼り付け..."></textarea>
+        </div>
+        <div class="input-group">
+            <label for="report_file">または、ファイルをアップロード:</label>
+            <input type="file" id="report_file" name="report_file" accept=".pdf,.docx,.xlsx,.csv,.txt">
+        </div>
+        <div class="button-container">
+            <button type="submit">監査実行</button>
+        </div>
+    </form>
+
+    <div id="loader" class="loader">
+        <p>監査を実行中です... (数分かかる場合があります)</p>
+    </div>
+
+    <div id="results-container" class="results" style="display: none;">
+        <div class="button-container">
+            <button id="pdf-button">PDFでダウンロード</button>
+        </div>
+
+        <h2>総合評価</h2>
+        <div class="summary-container">
+            <div class="summary-text">
+                <h3>総括コメント</h3>
+                <pre id="summary-comment"></pre>
+            </div>
+            <div class="chart-container">
+                <h3>評価レーダーチャート</h3>
+                <canvas id="radarChart"></canvas>
+            </div>
+        </div>
+
+        <h2>詳細評価</h2>
+        <div id="evaluation-table-container"></div>
+
+        <h2>処理プロセス</h2>
+        <ul id="process-logs"></ul>
+
+        <h2>参照ガイダンス (要約)</h2>
+        <pre id="guidance-summary"></pre>
+        
+        <h2>参照元ドキュメント一覧</h2>
+        <ul id="citation-list"></ul>
+    </div>
+
+    <script>
+        let chartInstance = null;
+        let fullResult = null;
+
+        document.getElementById('audit-form').addEventListener('submit', async function(event) {
+            event.preventDefault();
+            
+            const reportText = document.getElementById('report_text').value;
+            const reportFile = document.getElementById('report_file').files[0];
+            const loader = document.getElementById('loader');
+            const resultsContainer = document.getElementById('results-container');
+            
+            if (!reportText && !reportFile) {
+                alert('テキストを入力するか、ファイルをアップロードしてください。');
+                return;
+            }
+
+            loader.style.display = 'block';
+            resultsContainer.style.display = 'none';
+            if (chartInstance) {
+                chartInstance.destroy();
+            }
+
+            const formData = new FormData();
+            if (reportFile) {
+                formData.append('report_file', reportFile);
+            }
+            if (reportText) {
+                formData.append('report_text', reportText);
+            }
+
+            try {
+                const response = await fetch('/audit', {
+                    method: 'POST',
+                    body: formData
+                });
+
+                if (!response.ok) {
+                    const errorText = await response.text();
+                    throw new Error(`HTTP error! status: ${response.status}, details: ${errorText}`);
+                }
+
+                fullResult = await response.json();
+                renderFinalResult(fullResult);
+
+            } catch (error) {
+                const resultsContainer = document.getElementById('results-container');
+                const tableContainer = document.getElementById('evaluation-table-container');
+                tableContainer.innerHTML = `<p style="color: red;">エラーが発生しました: ${error.message}</p>`;
+                resultsContainer.style.display = 'block';
+            } finally {
+                loader.style.display = 'none';
+            }
+        });
+
+        document.getElementById('pdf-button').addEventListener('click', function() {
+            if (fullResult && fullResult.pdf_b64) {
+                const pdfData = fullResult.pdf_b64;
+                const byteCharacters = atob(pdfData);
+                const byteNumbers = new Array(byteCharacters.length);
+                for (let i = 0; i < byteCharacters.length; i++) {
+                    byteNumbers[i] = byteCharacters.charCodeAt(i);
+                }
+                const byteArray = new Uint8Array(byteNumbers);
+                const blob = new Blob([byteArray], {type: 'application/pdf'});
+                const link = document.createElement('a');
+                link.href = window.URL.createObjectURL(blob);
+                link.download = 'evaluation_report.pdf';
+                link.click();
+            } else {
+                alert('PDFデータが見つかりません。');
+            }
+        });
+
+        function renderFinalResult(result) {
+            const tableContainer = document.getElementById('evaluation-table-container');
+            const logsUl = document.getElementById('process-logs');
+            const guidancePre = document.getElementById('guidance-summary');
+            const summaryCommentPre = document.getElementById('summary-comment');
+            const radarChartCtx = document.getElementById('radarChart').getContext('2d');
+            const citationList = document.getElementById('citation-list');
+            const resultsContainer = document.getElementById('results-container');
+
+            // 1. Render Evaluation Table
+            if (result.evaluation_table && Array.isArray(result.evaluation_table)) {
+                const table = document.createElement('table');
+                const thead = table.createTHead();
+                const headerRow = thead.insertRow();
+                const headers = ['項目', '評価', '良い点', '改善点', '参考文献'];
+                headers.forEach(text => {
+                    const th = document.createElement('th');
+                    th.textContent = text;
+                    headerRow.appendChild(th);
+                });
+
+                const tbody = table.createTBody();
+                let currentClassification = "";
+                result.evaluation_table.forEach(rowData => {
+                    if (rowData.classification !== currentClassification) {
+                        currentClassification = rowData.classification;
+                        const groupRow = tbody.insertRow();
+                        const groupCell = groupRow.insertCell();
+                        groupCell.colSpan = headers.length;
+                        groupCell.textContent = currentClassification;
+                        groupCell.classList.add('classification-header');
+                    }
+
+                    const row = tbody.insertRow();
+                    row.insertCell().textContent = rowData.item;
+                    row.insertCell().textContent = rowData.score;
+                    row.insertCell().textContent = rowData.good_point;
+                    row.insertCell().textContent = rowData.improvement_point;
+                    row.insertCell().textContent = rowData.reference || 'N/A';
+                });
+                tableContainer.innerHTML = '';
+                tableContainer.appendChild(table);
+            }
+
+            // 2. Render Synthesis and Chart
+            if (result.synthesis) {
+                summaryCommentPre.textContent = result.synthesis.summary_comment || "N/A";
+            }
+            if (result.radar_chart_data) {
+                chartInstance = new Chart(radarChartCtx, {
+                    type: 'radar',
+                    data: {
+                        labels: result.radar_chart_data.labels,
+                        datasets: [{
+                            label: '評価スコア',
+                            data: result.radar_chart_data.data,
+                            fill: true,
+                            backgroundColor: 'rgba(54, 162, 235, 0.2)',
+                            borderColor: 'rgb(54, 162, 235)',
+                            pointBackgroundColor: 'rgb(54, 162, 235)',
+                            pointBorderColor: '#fff',
+                            pointHoverBackgroundColor: '#fff',
+                            pointHoverBorderColor: 'rgb(54, 162, 235)'
+                        }]
+                    },
+                    options: {
+                        scales: { r: { angleLines: { display: true }, suggestedMin: 0, suggestedMax: 5 } }
+                    }
+                });
+            }
+
+            // 3. Render Process Logs
+            if (result.process_logs && Array.isArray(result.process_logs)) {
+                logsUl.innerHTML = '';
+                result.process_logs.forEach(log => {
+                    const li = document.createElement('li');
+                    li.textContent = log;
+                    logsUl.appendChild(li);
+                });
+            }
+
+            // 4. Render Guidance Summary and Citations
+            if (result.retrieved_guidance) {
+                guidancePre.textContent = result.retrieved_guidance;
+            }
+            if (result.retrieved_citations && Array.isArray(result.retrieved_citations)) {
+                citationList.innerHTML = '';
+                result.retrieved_citations.forEach(c => {
+                    const li = document.createElement('li');
+                    li.textContent = `${c.title} (${c.uri})`;
+                    citationList.appendChild(li);
+                });
+            }
+
+            resultsContainer.style.display = 'block';
+        }
+    </script>
+
+</body>
+</html>
